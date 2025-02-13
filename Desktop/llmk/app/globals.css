@@ -27,6 +27,30 @@
     --ring: 24 5.4% 63.9%;
     --radius: 0.75rem;
   }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: 20 14.3% 4.1%;
+      --foreground: 36 33% 98%;
+      --card: 20 14.3% 4.1%;
+      --card-foreground: 36 33% 98%;
+      --popover: 20 14.3% 4.1%;
+      --popover-foreground: 36 33% 98%;
+      --primary: 60 9.1% 97.8%;
+      --primary-foreground: 24 9.8% 10%;
+      --secondary: 24 9.8% 10%;
+      --secondary-foreground: 60 9.1% 97.8%;
+      --muted: 25 5.3% 44.7%;
+      --muted-foreground: 30 4.8% 95.9%;
+      --accent: 24 9.8% 10%;
+      --accent-foreground: 16 90% 65%;
+      --destructive: 60 9.1% 97.8%;
+      --destructive-foreground: 0 84.2% 60.2%;
+      --border: 25 5.3% 44.7%;
+      --input: 25 5.3% 44.7%;
+      --ring: 30 4.8% 95.9%;
+    }
+  }
 }
 
 @layer base {
@@ -38,4 +62,3 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
-

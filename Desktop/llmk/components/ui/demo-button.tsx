@@ -16,7 +16,7 @@ export function DemoButton({ onClick }: DemoButtonProps) {
       className="w-full flex items-center gap-2 justify-start px-2"
     >
       <Sparkles className="h-4 w-4" />
-      <span className="hidden lg:inline-block">Demo Page</span>
+      <span className="hidden lg:inline-block">Home Page</span>
     </Button>
   );
 }

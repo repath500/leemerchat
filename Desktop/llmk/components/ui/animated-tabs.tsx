@@ -81,7 +81,7 @@ const defaultTabs: Tab[] = [
     content: (
       <div className="grid grid-cols-2 gap-4 w-full h-full">
         <img
-          src="https://ibb.co/S80C629"
+          src="https://i.imghippo.com/files/vUC6174xo.png"
           alt="Partner Models"
           className="rounded-lg w-full h-60 object-cover mt-0 !m-0 shadow-[0_0_20px_rgba(0,0,0,0.2)] border-none"
         />

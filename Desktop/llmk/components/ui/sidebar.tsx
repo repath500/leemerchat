@@ -397,18 +397,36 @@ SidebarSeparator.displayName = "SidebarSeparator"
 
 const SidebarContent = React.forwardRef<
   HTMLDivElement,
-  React.ComponentProps<"div">
->(({ className, ...props }, ref) => {
+  React.HTMLAttributes<HTMLDivElement> & {
+    asChild?: boolean
+  }
+>(({ className, asChild = false, ...props }, ref) => {
+  const { state, toggleSidebar } = useSidebar()
+
   return (
     <div
       ref={ref}
-      data-sidebar="content"
       className={cn(
-        "flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+        "flex h-full flex-col overflow-hidden bg-background",
         className
       )}
       {...props}
-    />
+    >
+      <div className="flex items-center justify-between border-b px-4 py-2">
+        <span className="text-sm font-medium">LeemerChat</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={toggleSidebar}
+          className="h-8 w-8"
+        >
+          <PanelLeft className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {props.children}
+      </div>
+    </div>
   )
 })
 SidebarContent.displayName = "SidebarContent"
@@ -479,7 +497,10 @@ const SidebarGroupContent = React.forwardRef<
   <div
     ref={ref}
     data-sidebar="group-content"
-    className={cn("w-full text-sm", className)}
+    className={cn(
+      "w-full text-sm truncate whitespace-nowrap overflow-hidden",
+      className
+    )}
     {...props}
   />
 ))
@@ -505,7 +526,10 @@ const SidebarMenuItem = React.forwardRef<
   <li
     ref={ref}
     data-sidebar="menu-item"
-    className={cn("group/menu-item relative", className)}
+    className={cn(
+      "group/menu-item relative flex items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50",
+      className
+    )}
     {...props}
   />
 ))

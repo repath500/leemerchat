@@ -1,8 +1,20 @@
 import { NextResponse } from "next/server"
+import { generatePartnerResponse } from "@/lib/partnerservice"
+import { partnerModels } from "@/lib/partnerservice"
 
-const GROQ_API_KEY = "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"
+const GROQ_API_KEY = "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"
+const OPENROUTER_API_KEY = "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"
 
-// Update the model mapping and system prompt handling
+// Mapping for Qiwi models to Groq/OpenAI models
+const modelMapping: { [key: string]: string } = {
+  "qiwi-reasoning": "deepseek-r1-distill-llama-70b",
+  "qiwi-medium": "qwen-2.5-32b",
+  "qiwi-small": "llama-3.2-3b-preview",
+  "deepseek-r1-distill-llama-70b": "deepseek-r1-distill-llama-70b",
+  "qwen-2.5-32b": "qwen-2.5-32b",
+  "llama-3.2-3b-preview": "llama-3.2-3b-preview"
+}
+
 const getSystemPrompt = (model: string, textStyle: string, isForTitle = false) => {
   if (isForTitle) {
     return "You are a title generator. Generate a very short title (4-6 words) that captures the essence of the conversation. Be concise and clear."
@@ -12,36 +24,111 @@ const getSystemPrompt = (model: string, textStyle: string, isForTitle = false) =
 
   const modelSpecificPrompt =
     {
-      "qiwi-small": "You are quick and concise, providing instant answers while maintaining accuracy.",
-      "qiwi-medium": "You balance speed with intelligence, providing comprehensive yet efficient responses.",
+      "qiwi-small": "You are quick and concise, providing instant answers while maintaining accuracy and markdown formatted reply.",
+      "qiwi-medium": "You balance speed with intelligence, providing comprehensive yet efficient responses and markdown formatted reply.",
       "qiwi-reasoning":
         "You excel at complex problem-solving. Format your response with reasoning in <think>your step-by-step reasoning process</think> followed by your final response. Use markdown formatting for better readability.",
     }[model] || ""
 
-  const stylePrompt =
-    {
-      default: "You communicate in a clear and natural way.",
-      professional: "You communicate in a formal and business-like manner.",
-      casual: "You communicate in a friendly and relaxed way.",
-      creative: "You communicate with flair and imagination.",
-    }[textStyle] || "You communicate in a clear and natural way."
+  const stylePrompt = {
+    default: "",
+    creative: "Respond with creativity and imagination.",
+    professional: "Maintain a formal and professional tone.",
+  }[textStyle] || ""
 
-  return `${basePrompt} ${modelSpecificPrompt} ${stylePrompt}`
+  return `${basePrompt}${modelSpecificPrompt}${stylePrompt}`
+}
+
+const getTitleSystemPrompt = () => {
+  return `You are an expert at creating concise, descriptive titles for conversations. 
+Generate a title that captures the essence of the entire conversation in 2-4 words. 
+Be precise, creative, and avoid generic terms. 
+Focus on the core topic or main goal of the conversation.
+
+Guidelines:
+- Use clear, specific language
+- Capture the primary intent or subject
+- Avoid vague or overly broad titles
+- Prioritize meaningful keywords`
 }
 
 export async function POST(req: Request) {
   try {
-    const { messages, model, textStyle = "default", isForTitle = false } = await req.json()
+    const { messages, model, isForTitle = false, textStyle = "default" } = await req.json()
 
-    const groqModel =
-      model === "qiwi-reasoning"
-        ? "deepseek-r1-distill-llama-70b"
-        : model === "qiwi-medium"
-          ? "qwen-2.5-32b"
-          : "llama-3.1-8b-instant"
+    if (isForTitle) {
+      const titleSystemPrompt = getTitleSystemPrompt()
+      const titleMessages = [
+        { role: "system", content: titleSystemPrompt },
+        { role: "user", content: `Analyze the entire conversation and generate a 2-4 word title that best represents its content:\n\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` }
+      ]
 
-    const systemPrompt = getSystemPrompt(model, textStyle, isForTitle)
+      const titleResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GROQ_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: titleMessages,
+          max_tokens: 20,
+          temperature: 0.7,
+          stream: true
+        })
+      })
 
+      return new NextResponse(titleResponse.body, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive"
+        }
+      })
+    }
+
+    // Explicitly check if the model is a partner model
+    const isPartnerModel = partnerModels.some(
+      (partnerModel) => partnerModel.id === model
+    )
+
+    if (isPartnerModel) {
+      console.log(`Using partner model: ${model}`)
+      const partnerResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: "system", content: getSystemPrompt(model, textStyle, isForTitle) },
+            ...messages
+          ],
+          stream: true,
+        }),
+      })
+
+      if (!partnerResponse.ok) {
+        const errorText = await partnerResponse.text()
+        console.error(`OpenRouter API error: ${partnerResponse.status} ${partnerResponse.statusText}`, errorText)
+        throw new Error(`OpenRouter API error: ${partnerResponse.status} ${partnerResponse.statusText}`)
+      }
+
+      return new NextResponse(partnerResponse.body, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
+      })
+    }
+
+    const groqModel = modelMapping[model] || "llama-3.1-8b-instant"
+    console.log(`Using Groq model: ${groqModel}`)
+
+    // Use Groq API for non-partner models
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -51,73 +138,30 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         model: groqModel,
         messages: [
-          { role: "system", content: systemPrompt },
-          ...messages.map(({ role, content }: { role: string; content: string }) => ({
-            role,
-            content,
-          })),
+          { role: "system", content: getSystemPrompt(model, textStyle, isForTitle) },
+          ...messages
         ],
-        temperature: 0.7,
-        max_tokens: isForTitle ? 20 : 1024,
-        top_p: 0.95,
         stream: true,
       }),
     })
 
     if (!response.ok) {
+      const errorText = await response.text()
+      console.error(`Groq API error: ${response.status} ${response.statusText}`, errorText)
       throw new Error(`Groq API error: ${response.status} ${response.statusText}`)
     }
 
-    const reader = response.body?.getReader()
-    const encoder = new TextEncoder()
-    const decoder = new TextDecoder()
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        if (!reader) {
-          controller.close()
-          return
-        }
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-
-            const chunk = decoder.decode(value)
-            const lines = chunk.split("\n")
-
-            for (const line of lines) {
-              if (line.startsWith("data: ") && line !== "data: [DONE]") {
-                try {
-                  const data = JSON.parse(line.slice(6))
-                  if (data.choices[0]?.delta?.content) {
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
-                  }
-                } catch (e) {
-                  console.error("Error parsing JSON:", e)
-                }
-              }
-            }
-          }
-        } catch (error) {
-          console.error("Stream reading error:", error)
-        } finally {
-          controller.close()
-        }
-      },
-    })
-
-    return new NextResponse(stream, {
+    return new NextResponse(response.body, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        Connection: "keep-alive",
+        "Connection": "keep-alive",
       },
     })
   } catch (error) {
-    console.error("Error:", error)
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
+    console.error("Chat API error:", error)
+    return NextResponse.json({ 
+      error: error instanceof Error ? error.message : "Internal Server Error" 
+    }, { status: 500 })
   }
 }
-

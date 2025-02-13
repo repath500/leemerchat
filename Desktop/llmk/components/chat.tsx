@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Info, User, Bot, Pencil, Trash2, Menu as MenuIcon, Sun, Moon, ChevronDown, ImageIcon, LinkIcon, Plus } from "lucide-react"
+import { Info, User, Bot, Pencil, Trash2, Menu as MenuIcon, Sun, Moon, ChevronDown, ImageIcon, LinkIcon, Plus, Zap } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -10,7 +10,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { generatePartnerResponse, partnerModels } from "@/lib/partnerservice"
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useContext } from "react"
+import { DarkModeContext } from "@/lib/dark-mode-context"
 import { InfoPopup } from "@/components/ui/info-popup"
 import { AnimatedTabs } from "@/components/ui/animated-tabs"
 import { UserProfile } from "@/components/ui/user-profile"
@@ -33,13 +34,12 @@ interface Message {
 }
 
 interface ChatProps {
-  isDarkMode: boolean
-  setIsDarkMode: (isDarkMode: boolean) => void
   isInfoOpen: boolean
   setIsInfoOpen: (isInfoOpen: boolean) => void
 }
 
-export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoOpen }: ChatProps) {
+export default function Chat({ isInfoOpen, setIsInfoOpen }: ChatProps) {
+  const { isDarkMode, toggleDarkMode } = useContext(DarkModeContext)
   const [input, setInput] = useState("")
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null)
@@ -52,7 +52,11 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [isUserProfileOpen, setIsUserProfileOpen] = useState(false)
   const [isPricingOpen, setIsPricingOpen] = useState(false)
+  const [thinkTag, setThinkTag] = useState("")
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [editedChatTitle, setEditedChatTitle] = useState("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const chatContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (isDarkMode) {
@@ -66,23 +70,62 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
     window.location.reload();
   }
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  useEffect(() => {
+    if (!chatContainerRef.current || !messagesEndRef.current) return
+    
+    // Always scroll to bottom when messages are loading
+    if (isLoading) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+      return
+    }
+    
+    // Ensure the chat container can scroll
+    const chatContainer = chatContainerRef.current
+    chatContainer.style.overflowY = 'auto'
+    chatContainer.style.maxHeight = '100%'
+    
+    // Check if the user is near the bottom (within 100 pixels)
+    const { scrollTop, clientHeight, scrollHeight } = chatContainer
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
+    
+    if (isNearBottom) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [currentConversation?.messages, isLoading])
+
+  const handleScroll = () => {
+    if (!chatContainerRef.current) return
+    const chatContainer = chatContainerRef.current
+    chatContainer.style.overflowY = 'auto'
   }
 
-  useEffect(() => {
-    if (currentConversation?.messages) {
-      scrollToBottom()
+  const handleModelSelect = (model: string) => {
+    console.log("Model selected:", model)
+    if (model === "partner") {
+      console.log("Setting partner model to true")
+      setIsPartnerModel(true)
+      setSelectedModel(partnerModels[0].id)  // Default to first partner model
+    } else {
+      console.log("Setting partner model to false")
+      setIsPartnerModel(false)
+      setSelectedModel(model)
     }
-  }, [currentConversation?.messages, scrollToBottom])
+  }
 
   const handleModelChange = (model: string) => {
     setSelectedModel(model)
-    setIsPartnerModel(false)
+    // Reset partner model if switching to a non-partner model
+    if (model !== "partner") {
+      setIsPartnerModel(false)
+      setSelectedPartnerModel(null)
+    } else {
+      setIsPartnerModel(true)
+    }
   }
 
-  const handlePartnerModelChange = (model: string) => {
-    setSelectedPartnerModel(model)
+  const handlePartnerModelChange = (modelId: string) => {
+    setSelectedPartnerModel(modelId)
+    setSelectedModel("partner")
     setIsPartnerModel(true)
   }
 
@@ -102,7 +145,29 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
             isUser ? "bg-primary text-primary-foreground" : "bg-muted"
           )}
         >
-          {message.content}
+          {message.role === "assistant" ? (
+            <ReactMarkdown
+              components={{
+                p: ({ children }) => (
+                  <p className="scroll-smooth">
+                    {children}
+                  </p>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          ) : (
+            message.content
+          )}
+          {message.role === "assistant" && message.content === "" && (
+            <div className="flex items-center gap-2">
+              <span className="animate-pulse">Thinking</span>
+              <span className="animate-bounce delay-100">.</span>
+              <span className="animate-bounce delay-200">.</span>
+              <span className="animate-bounce delay-300">.</span>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -143,10 +208,16 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
     try {
       let response
       if (isPartnerModel) {
-        response = await generatePartnerResponse(
-          currentConversation ? [...currentConversation.messages, newMessage] : [newMessage],
-          selectedPartnerModel
-        )
+        response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: currentConversation
+              ? [...currentConversation.messages, newMessage]
+              : [newMessage],
+            model: selectedPartnerModel,
+          }),
+        })
       } else {
         response = await fetch("/api/chat", {
           method: "POST",
@@ -156,7 +227,6 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
               ? [...currentConversation.messages, newMessage]
               : [newMessage],
             model: selectedModel,
-            textStyle: "default",
           }),
         })
       }
@@ -166,14 +236,11 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
       const reader = response.body?.getReader()
       if (!reader) throw new Error("No reader available")
 
-      // Add empty assistant message immediately
+      // Add empty assistant message immediately to show thinking state
       const assistantMessage: Message = { role: "assistant", content: "" }
       setCurrentConversation(prev => {
         if (!prev) return prev
-        return {
-          ...prev,
-          messages: [...prev.messages, assistantMessage],
-        }
+        return { ...prev, messages: [...prev.messages, assistantMessage] }
       })
 
       while (true) {
@@ -187,8 +254,11 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
           if (line.startsWith("data: ") && line !== "data: [DONE]") {
             try {
               const data = JSON.parse(line.slice(6))
-              if (data.choices[0]?.delta?.content) {
-                const content = data.choices[0].delta.content
+              const content = data.choices[0]?.delta?.content || 
+                              data.choices[0]?.text || 
+                              data.delta?.content
+
+              if (content) {
                 setCurrentConversation(prev => {
                   if (!prev) return prev
                   const messages = [...prev.messages]
@@ -225,7 +295,6 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               messages: [newMessage],
-              model: selectedModel,
               isForTitle: true,
             }),
           })
@@ -256,20 +325,16 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
                 }
               }
 
-              if (title && title.trim()) {
-                const trimmedTitle = title.trim()
+              // Update conversation title if generated
+              if (title.trim()) {
                 setCurrentConversation(prev => {
                   if (!prev) return prev
-                  return { ...prev, title: trimmedTitle }
+                  const updatedConv = { ...prev, title: title.trim() }
+                  setConversations(convs => 
+                    convs.map(conv => conv.id === prev.id ? updatedConv : conv)
+                  )
+                  return updatedConv
                 })
-                setConversations(prev =>
-                  prev.map(conv => {
-                    if (conv.id === conversationId) {
-                      return { ...conv, title: trimmedTitle }
-                    }
-                    return conv
-                  })
-                )
               }
             }
           }
@@ -278,7 +343,7 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
         }
       }
     } catch (error) {
-      console.error("Error:", error)
+      console.error("Chat API error:", error)
     } finally {
       setIsLoading(false)
     }
@@ -365,12 +430,6 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
     }
   }
 
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
-    }
-  }, [currentConversation?.messages])
-
   const createNewConversation = () => {
     const newConversation: Conversation = {
       id: crypto.randomUUID(),
@@ -413,6 +472,130 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
     handleSubmit(event as React.FormEvent<HTMLFormElement>)
   }
 
+  const parseThinkTag = (content: string) => {
+    const thinkTagRegex = /<think>(.*?)<\/think>/g
+    const matches = content.match(thinkTagRegex)
+
+    if (matches) {
+      const thinkTagOptions = matches.map((match) => {
+        const option = match.replace(/<think>|<\/think>/g, "")
+        return (
+          <SelectItem key={option} value={option}>
+            {option}
+          </SelectItem>
+        )
+      })
+
+      return (
+        <Select
+          value={thinkTag}
+          onValueChange={(value) => setThinkTag(value)}
+          className="max-w-md"
+        >
+          <SelectTrigger className="flex justify-between gap-2">
+            <span>Think Tag</span>
+            <ChevronDown className="h-4 w-4" />
+          </SelectTrigger>
+          <SelectContent>
+            {thinkTagOptions}
+          </SelectContent>
+        </Select>
+      )
+    }
+
+    return null
+  }
+
+  const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEditedChatTitle(e.target.value)
+  }
+
+  const saveTitle = () => {
+    if (editedChatTitle.trim()) {
+      setCurrentConversation(prev => {
+        if (!prev) return prev
+        const updatedConv = { ...prev, title: editedChatTitle.trim() }
+        setConversations(convs => 
+          convs.map(conv => conv.id === prev.id ? updatedConv : conv)
+        )
+        return updatedConv
+      })
+    }
+    setIsEditingTitle(false)
+  }
+
+  const generateShortTitle = async () => {
+    if (!currentConversation || currentConversation.messages.length < 2) return
+
+    // Use the first user message as context for title generation
+    const contextMessage = currentConversation.messages.find(m => m.role === "user")
+    if (!contextMessage) return
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [contextMessage],
+          isForTitle: true,
+          model: selectedModel,
+        }),
+      })
+
+      if (response.ok) {
+        const reader = response.body?.getReader()
+        let title = ""
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            const chunk = new TextDecoder().decode(value)
+            const lines = chunk.split("\n")
+
+            for (const line of lines) {
+              if (line.startsWith("data: ") && line !== "data: [DONE]") {
+                try {
+                  const data = JSON.parse(line.slice(6))
+                  if (data.choices[0]?.delta?.content) {
+                    title += data.choices[0].delta.content
+                  }
+                } catch (e) {
+                  console.error("Error parsing title JSON:", e)
+                }
+              }
+            }
+          }
+
+          // Trim and limit to 5-6 words
+          const trimmedTitle = title.trim().split(/\s+/).slice(0, 6).join(" ")
+          
+          if (trimmedTitle) {
+            setCurrentConversation(prev => {
+              if (!prev) return prev
+              const updatedConv = { ...prev, title: trimmedTitle }
+              setConversations(convs => 
+                convs.map(conv => conv.id === prev.id ? updatedConv : conv)
+              )
+              return updatedConv
+            })
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error generating title:", error)
+    }
+  }
+
+  useEffect(() => {
+    if (currentConversation && 
+        (!currentConversation.title || currentConversation.title === "New Chat") && 
+        currentConversation.messages.length > 1) {
+      generateShortTitle()
+    }
+  }, [currentConversation?.messages])
+
   return (
     <div className={cn("flex min-h-screen flex-col bg-background", isDarkMode && "dark")}>
       {isInfoOpen && (
@@ -420,7 +603,7 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
           isOpen={isInfoOpen} 
           onClose={() => setIsInfoOpen(false)} 
           selectedModel={selectedModel}
-          onModelChange={handleModelChange}
+          onModelChange={handleModelSelect}
         />
       )}
       {isUserProfileOpen && <UserProfile onClose={() => setIsUserProfileOpen(false)} />}
@@ -428,17 +611,51 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
 
       <div className="sticky top-0 z-50 flex items-center justify-between border-b bg-background/95 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={() => setIsDarkMode(!isDarkMode)}>
-            {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
-          <Button variant="ghost" size="icon" onClick={() => setIsUserProfileOpen(true)}>
-            <User className="h-4 w-4" />
+        <Button variant="ghost" size="icon" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
+            <MenuIcon className="h-4 w-4" />
           </Button>
           <DemoButton onClick={handleDemoClick} />
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setIsPricingOpen(true)}>
-          Upgrade
-        </Button>
+        <div className="flex items-center gap-2">
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm">
+                {selectedModel === "qiwi-reasoning"
+                  ? "Qiwi-Reasoning"
+                  : selectedModel === "qiwi-medium"
+                    ? "Qiwi-Medium"
+                    : "Qiwi-Small"}
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem onClick={() => handleModelChange("qiwi-reasoning")}>
+                Qiwi-Reasoning
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleModelChange("qiwi-medium")}>
+                Qiwi-Medium
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleModelChange("qiwi-small")}>
+                Qiwi-Small
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm">Partner Model</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              {partnerModels.map((model) => (
+                <DropdownMenuItem key={model.id} onClick={() => handlePartnerModelChange(model.id)}>
+                  {model.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button variant="ghost" size="icon" onClick={() => setIsPricingOpen(true)}>
+            <Zap className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-1">
@@ -456,7 +673,7 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
               </Button>
             </div>
           </div>
-          <div className="flex flex-col gap-2 p-4">
+          <div className="flex flex-col gap-2 p-4 overflow-y-auto">
             <Button variant="secondary" className="justify-start gap-2" onClick={createNewConversation}>
               <Plus className="h-4 w-4" />
               <span>New chat</span>
@@ -488,51 +705,41 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
         >
           <div className="flex min-h-[60px] items-center gap-4 border-b px-4">
             <div className="flex items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost">
-                    {selectedModel === "qiwi-reasoning"
-                      ? "Qiwi-Reasoning"
-                      : selectedModel === "qiwi-medium"
-                        ? "Qiwi-Medium"
-                        : "Qiwi-Small"}
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem onClick={() => handleModelChange("qiwi-reasoning")}>
-                    Qiwi-Reasoning
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleModelChange("qiwi-medium")}>
-                    Qiwi-Medium
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleModelChange("qiwi-small")}>
-                    Qiwi-Small
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost">Partner Model</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  {partnerModels.map((model) => (
-                    <DropdownMenuItem key={model.id} onClick={() => handlePartnerModelChange(model.id)}>
-                      {model.name}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <Button variant="ghost" size="icon" onClick={() => setIsInfoOpen(true)}>
+              {isEditingTitle ? (
+                <input
+                  type="text"
+                  value={editedChatTitle}
+                  onChange={handleTitleChange}
+                  onBlur={saveTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveTitle()
+                    if (e.key === "Escape") setIsEditingTitle(false)
+                  }}
+                  className="flex-1 bg-transparent outline-none"
+                  autoFocus
+                />
+              ) : (
+                <h2
+                  className="cursor-pointer"
+                  onClick={() => setIsEditingTitle(true)}
+                >
+                  {currentConversation?.title || "Untitled Chat"}
+                </h2>
+              )}
+              <span className="text-sm opacity-50">{selectedModel}</span>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="ghost" size="icon" onClick={() => setIsPricingOpen(true)}>
                 <Info className="h-4 w-4" />
               </Button>
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
-            <div className="mx-auto max-w-2xl">
+            <div 
+              className="mx-auto max-w-2xl h-[calc(100vh-300px)] overflow-y-auto" 
+              ref={chatContainerRef}
+            >
               {!currentConversation || currentConversation.messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center">
                   <h1 className="mb-8 text-center text-3xl font-semibold">Welcome to LeemerChat</h1>
@@ -541,6 +748,7 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
               ) : (
                 <div className="space-y-6">
                   {currentConversation.messages.map((message, i) => renderMessage(message, i))}
+                  {parseThinkTag(currentConversation.messages[currentConversation.messages.length - 1].content)}
                   <div ref={messagesEndRef} />
                 </div>
               )}
@@ -549,51 +757,27 @@ export default function Chat({ isDarkMode, setIsDarkMode, isInfoOpen, setIsInfoO
 
           <div className="border-t p-4">
             <form onSubmit={handleSubmit} className="mx-auto max-w-2xl">
-              <div className="relative">
-                <Textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault()
-                      handleSubmit(e)
-                    }
-                  }}
-                  placeholder="Message LeemerChat..."
-                  className="min-h-[100px] resize-none pr-36 pt-4"
-                  disabled={isLoading}
-                />
-                <div className="absolute right-3 top-3 flex items-center gap-2">
-                  <Select value={selectedModel} onValueChange={handleModelChange}>
-                    <SelectTrigger className="w-[130px]">
-                      <SelectValue placeholder="Model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="qiwi-reasoning">Qiwi-Reasoning</SelectItem>
-                      <SelectItem value="qiwi-medium">Qiwi-Medium</SelectItem>
-                      <SelectItem value="qiwi-small">Qiwi-Small</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={selectedPartnerModel} onValueChange={handlePartnerModelChange}>
-                    <SelectTrigger className="w-[130px]">
-                      <SelectValue placeholder="Partner Model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {partnerModels.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <div className="flex gap-1">
-                    <Button size="icon" variant="ghost" type="button">
-                      <ImageIcon className="h-4 w-4" />
-                    </Button>
-                    <Button size="icon" variant="ghost" type="button">
-                      <LinkIcon className="h-4 w-4" />
-                    </Button>
-                  </div>
+              <Textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault()
+                    handleSubmit(e)
+                  }
+                }}
+                placeholder="Message LeemerChat..."
+                className="min-h-[100px] resize-none"
+                disabled={isLoading}
+              />
+              <div className="absolute right-3 top-3 flex items-center gap-2">
+                <div className="flex gap-1">
+                  <Button size="icon" variant="ghost" type="button">
+                    <ImageIcon className="h-4 w-4" />
+                  </Button>
+                  <Button size="icon" variant="ghost" type="button">
+                    <LinkIcon className="h-4 w-4" />
+                  </Button>
                 </div>
               </div>
             </form>
